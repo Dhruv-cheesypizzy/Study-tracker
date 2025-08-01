@@ -74,52 +74,93 @@ def delete_study_session(study_date):
 # Initialize database
 init_database()
 
+# Authentication
+ADMIN_PASSWORD = "study2025"  # Change this to your preferred password
+
+def check_admin_access():
+    """Check if user has admin access"""
+    if 'admin_mode' not in st.session_state:
+        st.session_state.admin_mode = False
+    return st.session_state.admin_mode
+
+def show_login():
+    """Show login form for admin access"""
+    st.sidebar.header("🔐 Admin Access")
+    password = st.sidebar.text_input("Enter admin password:", type="password")
+    
+    if st.sidebar.button("Login"):
+        if password == ADMIN_PASSWORD:
+            st.session_state.admin_mode = True
+            st.sidebar.success("✅ Admin access granted!")
+            st.rerun()
+        else:
+            st.sidebar.error("❌ Incorrect password")
+    
+    st.sidebar.info("👀 You're in **VIEW-ONLY** mode")
+    st.sidebar.markdown("Enter admin password to add/edit data")
+
 # Main app
 st.title("📚 Study Tracker")
 st.markdown("Track your daily study hours and visualize your progress!")
 
-# Sidebar for input
-with st.sidebar:
-    st.header("📝 Log Study Session")
-    
-    # Date input
-    study_date = st.date_input(
-        "Date",
-        value=date.today(),
-        max_value=date.today()
-    )
-    
-    # Hours input
-    hours_studied = st.number_input(
-        "Hours Studied",
-        min_value=0.0,
-        max_value=24.0,
-        value=0.0,
-        step=0.5,
-        format="%.1f"
-    )
-    
-    # Submit button
-    if st.button("💾 Save Study Session", type="primary"):
-        if hours_studied > 0:
-            result = add_study_session(str(study_date), hours_studied)
-            if result == "added":
-                st.success(f"✅ Added {hours_studied} hours for {study_date}")
-            else:
-                st.success(f"✅ Updated {study_date} to {hours_studied} hours")
+# Check admin access
+is_admin = check_admin_access()
+
+# Sidebar for input (only for admin)
+if is_admin:
+    with st.sidebar:
+        st.header("📝 Log Study Session")
+        st.success("🔓 Admin Mode Active")
+        
+        if st.button("🚪 Logout", type="secondary"):
+            st.session_state.admin_mode = False
             st.rerun()
-        else:
-            st.error("⚠️ Please enter hours greater than 0")
-    
-    st.divider()
-    
-    # Delete section
-    st.header("🗑️ Delete Entry")
-    delete_date = st.date_input("Select date to delete", key="delete_date")
-    if st.button("🗑️ Delete Entry", type="secondary"):
-        delete_study_session(str(delete_date))
-        st.success(f"✅ Deleted entry for {delete_date}")
-        st.rerun()
+        
+        st.divider()
+else:
+    show_login()
+
+# Admin-only input section
+if is_admin:
+    with st.sidebar:
+        # Date input
+        study_date = st.date_input(
+            "Date",
+            value=date.today(),
+            max_value=date.today()
+        )
+        
+        # Hours input
+        hours_studied = st.number_input(
+            "Hours Studied",
+            min_value=0.0,
+            max_value=24.0,
+            value=0.0,
+            step=0.5,
+            format="%.1f"
+        )
+        
+        # Submit button
+        if st.button("💾 Save Study Session", type="primary"):
+            if hours_studied > 0:
+                result = add_study_session(str(study_date), hours_studied)
+                if result == "added":
+                    st.success(f"✅ Added {hours_studied} hours for {study_date}")
+                else:
+                    st.success(f"✅ Updated {study_date} to {hours_studied} hours")
+                st.rerun()
+            else:
+                st.error("⚠️ Please enter hours greater than 0")
+        
+        st.divider()
+        
+        # Delete section
+        st.header("🗑️ Delete Entry")
+        delete_date = st.date_input("Select date to delete", key="delete_date")
+        if st.button("🗑️ Delete Entry", type="secondary"):
+            delete_study_session(str(delete_date))
+            st.success(f"✅ Deleted entry for {delete_date}")
+            st.rerun()
 
 # Main content area
 col1, col2 = st.columns([1, 2])
