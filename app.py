@@ -1,9 +1,8 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, date
-import os
+from streamlit_gsheets import GSheetsConnection
 
 # Page config
 st.set_page_config(
@@ -12,153 +11,181 @@ st.set_page_config(
     layout="wide"
 )
 
-# Database setup
-def init_database():
-    """Initialize the SQLite database"""
-    conn = sqlite3.connect('study_data.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS study_sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT NOT NULL,
-            hours REAL NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
-
-def add_study_session(study_date, hours):
-    """Add a new study session to the database"""
-    conn = sqlite3.connect('study_data.db')
-    cursor = conn.cursor()
-    
-    # Check if entry for this date already exists
-    cursor.execute('SELECT id, hours FROM study_sessions WHERE date = ?', (study_date,))
-    existing = cursor.fetchone()
-    
-    if existing:
-        # Update existing entry
-        cursor.execute('UPDATE study_sessions SET hours = ? WHERE date = ?', (hours, study_date))
-        conn.commit()
-        conn.close()
-        return "updated"
-    else:
-        # Insert new entry
-        cursor.execute('INSERT INTO study_sessions (date, hours) VALUES (?, ?)', (study_date, hours))
-        conn.commit()
-        conn.close()
-        return "added"
+# Initialize Google Sheets connection
+@st.cache_resource
+def init_connection():
+    return st.connection("gsheets", type=GSheetsConnection)
 
 def get_study_data():
-    """Retrieve all study data from database"""
-    conn = sqlite3.connect('study_data.db')
-    df = pd.read_sql_query('SELECT date, hours FROM study_sessions ORDER BY date', conn)
-    conn.close()
-    
-    if not df.empty:
-        df['date'] = pd.to_datetime(df['date'])
-    
-    return df
+    """Retrieve all study data from Google Sheets"""
+    try:
+        conn = init_connection()
+        df = conn.read(worksheet="Sheet1", usecols=[0, 1], ttl=5)
+        
+        # Clean the dataframe
+        if not df.empty:
+            # Remove any completely empty rows
+            df = df.dropna(how='all')
+            # Ensure we have the right columns
+            if len(df.columns) >= 2:
+                df.columns = ['date', 'hours']
+                # Remove header row if it exists
+                df = df[df['date'] != 'date']
+                # Convert types
+                df['hours'] = pd.to_numeric(df['hours'], errors='coerce')
+                df = df.dropna()
+                df['date'] = pd.to_datetime(df['date'])
+                df = df.sort_values('date')
+            else:
+                df = pd.DataFrame(columns=['date', 'hours'])
+        else:
+            df = pd.DataFrame(columns=['date', 'hours'])
+            
+        return df
+    except Exception as e:
+        st.error(f"Error reading from Google Sheets: {str(e)}")
+        return pd.DataFrame(columns=['date', 'hours'])
+
+def add_study_session(study_date, hours):
+    """Add or update a study session in Google Sheets"""
+    try:
+        conn = init_connection()
+        
+        # Get existing data
+        df = get_study_data()
+        
+        # Convert study_date to string for comparison
+        date_str = str(study_date)
+        
+        # Check if entry exists
+        if not df.empty and date_str in df['date'].dt.strftime('%Y-%m-%d').values:
+            # Update existing entry
+            df.loc[df['date'].dt.strftime('%Y-%m-%d') == date_str, 'hours'] = hours
+            result = "updated"
+        else:
+            # Add new entry
+            new_row = pd.DataFrame({'date': [date_str], 'hours': [hours]})
+            df = pd.concat([df, new_row], ignore_index=True)
+            result = "added"
+        
+        # Sort by date
+        df = df.sort_values('date')
+        
+        # Prepare data for sheets (convert date to string)
+        df_to_write = df.copy()
+        df_to_write['date'] = df_to_write['date'].dt.strftime('%Y-%m-%d')
+        
+        # Write back to sheets
+        conn.update(worksheet="Sheet1", data=df_to_write)
+        
+        return result
+        
+    except Exception as e:
+        st.error(f"Error adding study session: {str(e)}")
+        return "error"
 
 def delete_study_session(study_date):
-    """Delete a study session from the database"""
-    conn = sqlite3.connect('study_data.db')
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM study_sessions WHERE date = ?', (study_date,))
-    conn.commit()
-    conn.close()
-
-# Initialize database
-init_database()
-
-# Authentication
-ADMIN_PASSWORD = "study2025"  # Change this to your preferred password
-
-def check_admin_access():
-    """Check if user has admin access"""
-    if 'admin_mode' not in st.session_state:
-        st.session_state.admin_mode = False
-    return st.session_state.admin_mode
-
-def show_login():
-    """Show login form for admin access"""
-    st.sidebar.header("🔐 Admin Access")
-    password = st.sidebar.text_input("Enter admin password:", type="password")
-    
-    if st.sidebar.button("Login"):
-        if password == ADMIN_PASSWORD:
-            st.session_state.admin_mode = True
-            st.sidebar.success("✅ Admin access granted!")
-            st.rerun()
-        else:
-            st.sidebar.error("❌ Incorrect password")
-    
-    st.sidebar.info("👀 You're in **VIEW-ONLY** mode")
-    st.sidebar.markdown("Enter admin password to add/edit data")
+    """Delete a study session from Google Sheets"""
+    try:
+        conn = init_connection()
+        
+        # Get existing data
+        df = get_study_data()
+        
+        if not df.empty:
+            # Remove the entry
+            date_str = str(study_date)
+            df = df[df['date'].dt.strftime('%Y-%m-%d') != date_str]
+            
+            # Prepare data for sheets
+            if not df.empty:
+                df_to_write = df.copy()
+                df_to_write['date'] = df_to_write['date'].dt.strftime('%Y-%m-%d')
+            else:
+                # If no data left, create empty dataframe with headers
+                df_to_write = pd.DataFrame(columns=['date', 'hours'])
+            
+            # Write back to sheets
+            conn.update(worksheet="Sheet1", data=df_to_write)
+            
+        return True
+        
+    except Exception as e:
+        st.error(f"Error deleting study session: {str(e)}")
+        return False
 
 # Main app
 st.title("📚 Study Tracker")
 st.markdown("Track your daily study hours and visualize your progress!")
 
-# Check admin access
-is_admin = check_admin_access()
+# Instructions for first-time setup
+with st.expander("📋 Setup Instructions (Click if this is your first time)"):
+    st.markdown("""
+    **To connect your Google Sheets:**
+    
+    1. Create a new Google Sheet with 2 columns: `date` and `hours`
+    2. Share the sheet with your Streamlit app's service account email
+    3. Add the sheet URL to your Streamlit secrets
+    
+    **In your Streamlit app settings, add these secrets:**
+    ```toml
+    [connections.gsheets]
+    spreadsheet = "your_google_sheet_url_here"
+    type = "service_account"
+    project_id = "your_project_id"
+    private_key_id = "your_private_key_id"
+    private_key = "your_private_key"
+    client_email = "your_service_account_email"
+    client_id = "your_client_id"
+    auth_uri = "https://accounts.google.com/o/oauth2/auth"
+    token_uri = "https://token.googleapis.com/token"
+    auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+    client_x509_cert_url = "your_cert_url"
+    ```
+    
+    **Need help?** Follow the [Streamlit Google Sheets connection guide](https://docs.streamlit.io/knowledge-base/tutorials/databases/gcs-gsheets).
+    """)
 
-# Sidebar for input (only for admin)
-if is_admin:
-    with st.sidebar:
-        st.header("📝 Log Study Session")
-        st.success("🔓 Admin Mode Active")
-        
-        if st.button("🚪 Logout", type="secondary"):
-            st.session_state.admin_mode = False
+# Sidebar for input
+with st.sidebar:
+    st.header("📝 Log Study Session")
+    
+    # Date input
+    study_date = st.date_input(
+        "Date",
+        value=date.today(),
+        max_value=date.today()
+    )
+    
+    # Hours input
+    hours_studied = st.number_input(
+        "Hours Studied",
+        min_value=0.0,
+        max_value=24.0,
+        value=0.0,
+        step=0.5,
+        format="%.1f"
+    )
+    
+    # Submit button
+    if st.button("💾 Save Study Session", type="primary"):
+        if hours_studied > 0:
+            result = add_study_session(str(study_date), hours_studied)
+            if result == "added":
+                st.success(f"✅ Added {hours_studied} hours for {study_date}")
+            elif result == "updated":
+                st.success(f"✅ Updated {study_date} to {hours_studied} hours")
             st.rerun()
-        
-        st.divider()
-else:
-    show_login()
-
-# Admin-only input section
-if is_admin:
-    with st.sidebar:
-        # Date input
-        study_date = st.date_input(
-            "Date",
-            value=date.today(),
-            max_value=date.today()
-        )
-        
-        # Hours input
-        hours_studied = st.number_input(
-            "Hours Studied",
-            min_value=0.0,
-            max_value=24.0,
-            value=0.0,
-            step=0.5,
-            format="%.1f"
-        )
-        
-        # Submit button
-        if st.button("💾 Save Study Session", type="primary"):
-            if hours_studied > 0:
-                result = add_study_session(str(study_date), hours_studied)
-                if result == "added":
-                    st.success(f"✅ Added {hours_studied} hours for {study_date}")
-                else:
-                    st.success(f"✅ Updated {study_date} to {hours_studied} hours")
-                st.rerun()
-            else:
-                st.error("⚠️ Please enter hours greater than 0")
-        
-        st.divider()
-        
-        # Delete section
-        st.header("🗑️ Delete Entry")
-        delete_date = st.date_input("Select date to delete", key="delete_date")
-        if st.button("🗑️ Delete Entry", type="secondary"):
-            delete_study_session(str(delete_date))
+        else:
+            st.error("⚠️ Please enter hours greater than 0")
+    
+    st.divider()
+    
+    # Delete section
+    st.header("🗑️ Delete Entry")
+    delete_date = st.date_input("Select date to delete", key="delete_date")
+    if st.button("🗑️ Delete Entry", type="secondary"):
+        if delete_study_session(str(delete_date)):
             st.success(f"✅ Deleted entry for {delete_date}")
             st.rerun()
 
@@ -261,4 +288,5 @@ st.markdown("**💡 Tips:**")
 st.markdown("- Log your study sessions daily for best tracking")
 st.markdown("- You can update existing entries by selecting the same date")
 st.markdown("- Use the delete function to remove incorrect entries")
+st.markdown("- Your data is automatically saved to Google Sheets!")
 st.markdown("- Track consistently to see meaningful progress patterns!")
