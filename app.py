@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, date
-from streamlit_gsheets import GSheetsConnection
+from st_gsheets_connection import GSheetsConnection
 
 # Page config
 st.set_page_config(
@@ -290,3 +290,4 @@ st.markdown("- You can update existing entries by selecting the same date")
 st.markdown("- Use the delete function to remove incorrect entries")
 st.markdown("- Your data is automatically saved to Google Sheets!")
 st.markdown("- Track consistently to see meaningful progress patterns!")
+
