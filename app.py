@@ -20,7 +20,7 @@ def get_study_data():
     """Retrieve all study data from Google Sheets"""
     try:
         conn = init_connection()
-        df = conn.read(worksheet="study_tracker", usecols=[0, 1], ttl=5)
+        df = conn.read(worksheet="sheet1", usecols=[0, 1], ttl=5)
         
         # Clean the dataframe
         if not df.empty:
@@ -80,7 +80,7 @@ def add_study_session(study_date, hours):
         df_to_write['date'] = df_to_write['date'].dt.strftime('%Y-%m-%d')
         
         # Write back to sheets
-        conn.update(worksheet="study_tracker", data=df_to_write)
+        conn.update(worksheet="sheet1", data=df_to_write)
         
         return result
         
@@ -110,7 +110,7 @@ def delete_study_session(study_date):
                 df_to_write = pd.DataFrame(columns=['date', 'hours'])
             
             # Write back to sheets
-            conn.update(worksheet="study_tracker", data=df_to_write)
+            conn.update(worksheet="sheet1", data=df_to_write)
             
         return True
         
@@ -294,6 +294,7 @@ st.markdown("- You can update existing entries by selecting the same date")
 st.markdown("- Use the delete function to remove incorrect entries")
 st.markdown("- Your data is automatically saved to Google Sheets!")
 st.markdown("- Track consistently to see meaningful progress patterns!")
+
 
 
 
