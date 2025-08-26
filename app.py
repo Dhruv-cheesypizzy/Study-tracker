@@ -65,7 +65,11 @@ def add_study_session(study_date, hours):
         else:
             # Add new entry
             new_row = pd.DataFrame({'date': [date_str], 'hours': [hours]})
+            if df is None or df.empty:
+                df = new_row
+            else:
             df = pd.concat([df, new_row], ignore_index=True)
+
             result = "added"
         
         # Sort by date
@@ -290,6 +294,7 @@ st.markdown("- You can update existing entries by selecting the same date")
 st.markdown("- Use the delete function to remove incorrect entries")
 st.markdown("- Your data is automatically saved to Google Sheets!")
 st.markdown("- Track consistently to see meaningful progress patterns!")
+
 
 
 
