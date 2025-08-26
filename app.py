@@ -24,11 +24,57 @@ if 'study_data' not in st.session_state:
 def init_connection():
     if GSHEETS_AVAILABLE:
         try:
-            return st.connection("gsheets", type=GSheetsConnection)
+            conn = st.connection("gsheets", type=GSheetsConnection)
+            # Test the connection by trying to read
+            test_df = conn.read(worksheet=0, ttl=5)  # Try reading first sheet
+            st.success("✅ Google Sheets connection successful!")
+            return conn
         except Exception as e:
-            st.warning(f"Google Sheets connection failed: {str(e)}")
+            st.error(f"❌ Google Sheets connection failed: {str(e)}")
+            st.info("🔍 Debug info - Check your secrets configuration")
             return None
+    else:
+        st.warning("⚠️ streamlit_gsheets not installed")
     return None
+
+def debug_connection():
+    """Debug function to test Google Sheets connection"""
+    st.subheader("🔍 Connection Debug Info")
+    
+    conn = init_connection()
+    if conn is not None:
+        try:
+            # Try to read the sheet with different methods
+            st.write("Testing different ways to read your sheet...")
+            
+            # Method 1: Try reading by index
+            try:
+                df1 = conn.read(worksheet=0, ttl=5)
+                st.success(f"✅ Method 1 (worksheet=0): Found {len(df1)} rows, {len(df1.columns)} columns")
+                st.write("First few rows:", df1.head())
+            except Exception as e:
+                st.error(f"❌ Method 1 failed: {str(e)}")
+            
+            # Method 2: Try reading by name "sheet1"
+            try:
+                df2 = conn.read(worksheet="sheet1", ttl=5)
+                st.success(f"✅ Method 2 (worksheet='sheet1'): Found {len(df2)} rows, {len(df2.columns)} columns")
+                st.write("First few rows:", df2.head())
+            except Exception as e:
+                st.error(f"❌ Method 2 failed: {str(e)}")
+            
+            # Method 3: Try reading by name "Sheet1"
+            try:
+                df3 = conn.read(worksheet="Sheet1", ttl=5)
+                st.success(f"✅ Method 3 (worksheet='Sheet1'): Found {len(df3)} rows, {len(df3.columns)} columns")
+                st.write("First few rows:", df3.head())
+            except Exception as e:
+                st.error(f"❌ Method 3 failed: {str(e)}")
+                
+        except Exception as e:
+            st.error(f"❌ General connection error: {str(e)}")
+    else:
+        st.error("❌ No connection established")
 
 def get_study_data():
     """Retrieve study data from Google Sheets or session state fallback"""
@@ -37,28 +83,58 @@ def get_study_data():
     # Try Google Sheets first
     if conn is not None:
         try:
-            df = conn.read(worksheet="sheet1", usecols=[0, 1], ttl=5)
+            # Try different possible sheet names/indices
+            methods = [
+                ("worksheet=0", 0),
+                ("worksheet='sheet1'", "sheet1"),
+                ("worksheet='Sheet1'", "Sheet1"),
+            ]
+            
+            df = None
+            successful_method = None
+            
+            for method_name, sheet_identifier in methods:
+                try:
+                    df = conn.read(worksheet=sheet_identifier, usecols=[0, 1], ttl=5)
+                    successful_method = method_name
+                    break
+                except Exception as e:
+                    continue
+            
+            if df is None:
+                raise Exception("Could not read from any worksheet")
+            
+            st.info(f"📊 Successfully read data using {successful_method}")
             
             # Clean the dataframe
             if not df.empty:
+                st.write(f"Raw data shape: {df.shape}")
+                st.write("Raw data preview:", df.head())
+                
                 # Remove any completely empty rows
                 df = df.dropna(how='all')
+                
                 # Ensure we have the right columns
                 if len(df.columns) >= 2:
                     df.columns = ['date', 'hours']
-                    # Remove header row if it exists
-                    df = df[df['date'] != 'date']
+                    
+                    # Remove header row if it exists (case insensitive)
+                    df = df[~df['date'].astype(str).str.lower().isin(['date', 'Date', 'DATE'])]
+                    
                     # Convert types
                     df['hours'] = pd.to_numeric(df['hours'], errors='coerce')
                     df = df.dropna()
-                    df['date'] = pd.to_datetime(df['date'])
-                    df = df.sort_values('date')
+                    
+                    if not df.empty:
+                        df['date'] = pd.to_datetime(df['date'])
+                        df = df.sort_values('date')
                 else:
                     df = pd.DataFrame(columns=['date', 'hours'])
             else:
                 df = pd.DataFrame(columns=['date', 'hours'])
                 
             return df
+            
         except Exception as e:
             st.warning(f"Using local storage - Google Sheets error: {str(e)}")
     
@@ -110,8 +186,22 @@ def add_study_session(study_date, hours):
                 df_to_write = df.copy()
                 df_to_write['date'] = df_to_write['date'].dt.strftime('%Y-%m-%d')
                 
-                # Write back to sheets
-                conn.update(worksheet="sheet1", data=df_to_write)
+                # Try different methods to write
+                methods = [0, "sheet1", "Sheet1"]
+                write_success = False
+                
+                for method in methods:
+                    try:
+                        conn.update(worksheet=method, data=df_to_write)
+                        st.success(f"✅ Successfully wrote to worksheet using: {method}")
+                        write_success = True
+                        break
+                    except Exception as e:
+                        st.warning(f"Failed to write using {method}: {str(e)}")
+                        continue
+                
+                if not write_success:
+                    raise Exception("Could not write to any worksheet")
                 
                 return result
                 
@@ -151,82 +241,40 @@ def add_study_session(study_date, hours):
         st.error(f"Error adding study session: {str(e)}")
         return "error"
 
-def delete_study_session(study_date):
-    """Delete a study session"""
-    try:
-        conn = init_connection()
-        
-        # Convert study_date to datetime
-        if isinstance(study_date, str):
-            study_datetime = pd.to_datetime(study_date)
-        else:
-            study_datetime = pd.to_datetime(str(study_date))
-        
-        date_str = study_datetime.strftime('%Y-%m-%d')
-        
-        # Try Google Sheets first
-        if conn is not None:
-            try:
-                # Get existing data
-                df = get_study_data()
-                
-                if not df.empty:
-                    # Remove the entry
-                    df['date'] = pd.to_datetime(df['date'])
-                    df = df[df['date'].dt.strftime('%Y-%m-%d') != date_str]
-                    
-                    # Prepare data for sheets
-                    if not df.empty:
-                        df_to_write = df.copy()
-                        df_to_write['date'] = df_to_write['date'].dt.strftime('%Y-%m-%d')
-                    else:
-                        # If no data left, create empty dataframe with headers
-                        df_to_write = pd.DataFrame(columns=['date', 'hours'])
-                    
-                    # Write back to sheets
-                    conn.update(worksheet="sheet1", data=df_to_write)
-                
-                return True
-                
-            except Exception as e:
-                st.warning(f"Google Sheets failed, using local storage: {str(e)}")
-        
-        # Fallback to session state
-        df = st.session_state.study_data.copy()
-        
-        if not df.empty:
-            df['date'] = pd.to_datetime(df['date'])
-            df = df[df['date'].dt.strftime('%Y-%m-%d') != date_str]
-            st.session_state.study_data = df
-        
-        return True
-        
-    except Exception as e:
-        st.error(f"Error deleting study session: {str(e)}")
-        return False
-
 # Main app
-st.title("📚 Study Tracker")
+st.title("📚 Study Tracker (Debug Version)")
 st.markdown("Track your daily study hours and visualize your progress!")
+
+# Add debug section
+with st.expander("🔍 Debug Connection (Click to test your Google Sheets setup)"):
+    debug_connection()
 
 # Display connection status
 conn = init_connection()
 if conn is not None:
     st.success("✅ Connected to Google Sheets")
 else:
-    st.info("ℹ️ Using local storage - data will be lost when session ends. Set up Google Sheets for persistent storage.")
+    st.info("ℹ️ Using local storage - data will be lost when session ends.")
 
 # Instructions for first-time setup
-with st.expander("📋 Setup Instructions for Google Sheets (Click if this is your first time)"):
+with st.expander("📋 Setup Instructions for Google Sheets"):
     st.markdown("""
     **To connect your Google Sheets:**
     
     1. Create a new Google Sheet with 2 columns: `date` and `hours`
-    2. Make sure the sheet tab is named `sheet1`
-    3. Create a Google Cloud Project and enable Google Sheets API
-    4. Create a Service Account and download the JSON key file
-    5. Share your sheet with the service account email
-    6. Add the connection details to your Streamlit secrets
+    2. Make sure the sheet tab is named `sheet1` (lowercase)
+    3. Add a header row: A1="date", B1="hours"
+    4. Create a Google Cloud Project and enable Google Sheets API
+    5. Create a Service Account and download the JSON key file
+    6. Share your sheet with the service account email (give Editor permissions)
+    7. Add the connection details to your Streamlit secrets
+    
+    **Current sheet structure should be:**
+    ```
+    A1: date     B1: hours
+    A2: 2024-08-26  B2: 2.5
+    A3: 2024-08-27  B3: 3.0
+    ```
     
     **In your Streamlit app settings, add these secrets:**
     ```toml
@@ -243,8 +291,6 @@ with st.expander("📋 Setup Instructions for Google Sheets (Click if this is yo
     auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
     client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/your_service_account_email%40project.iam.gserviceaccount.com"
     ```
-    
-    **Need help?** Follow the [Streamlit Google Sheets connection guide](https://docs.streamlit.io/knowledge-base/tutorials/databases/gcs-gsheets).
     """)
 
 # Sidebar for input
@@ -282,37 +328,6 @@ with st.sidebar:
                 st.error("❌ Failed to save study session")
         else:
             st.error("⚠️ Please enter hours greater than 0")
-    
-    st.divider()
-    
-    # Delete section
-    st.header("🗑️ Delete Entry")
-    delete_date = st.date_input("Select date to delete", key="delete_date")
-    if st.button("🗑️ Delete Entry", type="secondary"):
-        if delete_study_session(delete_date):
-            st.success(f"✅ Deleted entry for {delete_date}")
-            st.rerun()
-        else:
-            st.error("❌ Failed to delete entry")
-    
-    # Testing section
-    st.divider()
-    st.header("🧪 Testing")
-    if st.button("Add Sample Data"):
-        sample_dates = ['2024-08-20', '2024-08-21', '2024-08-22', '2024-08-23', '2024-08-24']
-        sample_hours = [2.5, 3.0, 1.5, 4.0, 2.0]
-        
-        success_count = 0
-        for date_str, hours in zip(sample_dates, sample_hours):
-            result = add_study_session(date_str, hours)
-            if result in ["added", "updated"]:
-                success_count += 1
-        
-        if success_count == len(sample_dates):
-            st.success("✅ Added all sample data!")
-            st.rerun()
-        else:
-            st.warning(f"⚠️ Added {success_count}/{len(sample_dates)} sample entries")
 
 # Main content area
 col1, col2 = st.columns([1, 2])
@@ -351,9 +366,6 @@ with col2:
     st.header("📈 Progress Chart")
     
     if not df.empty and len(df) > 0:
-        # Ensure date column is datetime
-        df['date'] = pd.to_datetime(df['date'])
-        
         # Create line chart
         fig = px.line(
             df, 
@@ -365,7 +377,6 @@ with col2:
             line_shape='linear'
         )
         
-        # Customize the chart
         fig.update_traces(
             line=dict(color='#1f77b4', width=3),
             marker=dict(size=8, color='#ff7f0e')
@@ -382,42 +393,5 @@ with col2:
         )
         
         st.plotly_chart(fig, use_container_width=True)
-        
-        # Additional charts
-        if len(df) > 7:
-            st.subheader("📊 Weekly Average")
-            
-            # Calculate 7-day rolling average
-            df_sorted = df.sort_values('date')
-            df_sorted['rolling_avg'] = df_sorted['hours'].rolling(window=7, min_periods=1).mean()
-            
-            fig2 = px.line(
-                df_sorted,
-                x='date',
-                y='rolling_avg',
-                title='7-Day Rolling Average',
-                labels={'date': 'Date', 'rolling_avg': 'Average Hours'},
-                line_shape='spline'
-            )
-            
-            fig2.update_traces(line=dict(color='green', width=2))
-            fig2.update_layout(
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)',
-                font=dict(size=12),
-                title_font_size=14
-            )
-            
-            st.plotly_chart(fig2, use_container_width=True)
     else:
         st.info("📊 Your study progress chart will appear here once you log some sessions!")
-
-# Footer
-st.divider()
-st.markdown("---")
-st.markdown("**💡 Tips:**")
-st.markdown("- Log your study sessions daily for best tracking")
-st.markdown("- You can update existing entries by selecting the same date")
-st.markdown("- Use the delete function to remove incorrect entries")
-st.markdown("- Set up Google Sheets connection for data persistence!")
-st.markdown("- Track consistently to see meaningful progress patterns!")
